@@ -103,3 +103,102 @@ test_accuracy = accuracy(loglike_test, test_labels)
 print(f"Average log-likelihood for MAP is {avg_loglike:.3f}")
 print(f"Training accuracy for MAP is {train_accuracy:.3f}")
 print(f"Test accuracy for MAP is {test_accuracy:.3f}")
+
+# Randomly sample and plot 10 images from the learned distribution using the MAP estimates. 
+
+def image_sampler(theta, pi, num_images):
+    ## get nuber of features
+    num_features = theta.shape[0]
+    ## sample from the multinomial class distribution defined by the pi vector a total of num_images times.
+    classes_sampled = np.argmax(np.random.multinomial(1, pi, size=num_images), axis = 0)
+    ## Initialize list of pixel values for all pixels and all images sampled
+    x_j_ls = []
+
+    ## getting pixel values for each image to generate using the sampled classes
+    for n in classes_sampled:
+        ## getting the MAP theta vector of all pixels for the given sampled class n, resulting in a N_features vector of theta's
+        theta_j = theta[:, n]
+        my_generator = np.random.default_rng()
+        ## sampling all N_features pixel values based on their respective theta's using a binomial generator
+        x_j = my_generator.binomial(1, theta_j)
+        ## appending the pixel values
+        x_j_ls.append(x_j)
+    ## converting pixel values for all generate images into an N_imagex x N_features array
+    return np.asarray(x_j_ls)
+
+def plot_images(images, ims_per_row=5, padding=5, image_dimensions=(28, 28),
+                cmap=matplotlib.cm.binary, vmin=0., vmax=1.):
+    fig = plt.figure(1)
+    fig.clf()
+    ax = fig.add_subplot(111)
+
+    N_images = images.shape[0]
+    N_rows = np.int32(np.ceil(float(N_images) / ims_per_row))
+    pad_value = vmin
+    concat_images = np.full(((image_dimensions[0] + padding) * N_rows + padding,
+                             (image_dimensions[1] + padding) * ims_per_row + padding), pad_value)
+    for i in range(N_images):
+        cur_image = np.reshape(images[i, :], image_dimensions)
+        row_ix = i // ims_per_row
+        col_ix = i % ims_per_row
+        row_start = padding + (padding + image_dimensions[0]) * row_ix
+        col_start = padding + (padding + image_dimensions[1]) * col_ix
+        concat_images[row_start: row_start + image_dimensions[0],
+                      col_start: col_start + image_dimensions[1]] = cur_image
+        cax = ax.matshow(concat_images, cmap=cmap, vmin=vmin, vmax=vmax)
+        plt.xticks(np.array([]))
+        plt.yticks(np.array([]))
+
+    plt.plot()
+    plt.show()
+
+sampled_images = image_sampler(theta_est, pi_est, 10)
+plot_images(sampled_images)
+
+# We assume that only 30% of the pixels are observed. For the first 20 images in the training set, plot the images 
+# when the unobserved pixels are left as white, as well as the same images when the unobserved pixels are filled with 
+# the marginal probability of the pixel being 1 given the observed pixels
+
+def probabilistic_imputer(theta, pi, original_images, is_observed):
+
+    ## initializing list of impute images' pixel values
+    imputed_image1_ar = []
+    ## getting the images' pixel values, post-imputation, for each image one at a time
+    for i in range((original_images).shape[0]):
+        ## taking image i and reshaping into a 1xN_features array
+        original_image1 = train_images[i].reshape(1, train_images.shape[1])
+        ## taking the is_observed matrix for image i and reshaping into a 1xN_features array
+        is_observed1 = is_observed[i, :].reshape(1, is_observed.shape[1])
+        ## calculating the Bernoulli pdf output for each pixel
+        ### term_observed_1 is the first part of the bernoulli concerning the probability of pixel a being 1
+        term_observed_1 = np.power(theta, original_image1.T)
+        ### term_observed_2 is the second part of the bernoulli concerning the probability of pixel a being 0
+        term_observed_2 = np.power((1-theta), (1-original_image1).T)
+        ### multiplying the probabilities element-wise to get the Bernoulli pdf output
+        term_observed_prod = np.multiply(term_observed_1, term_observed_2)
+        ## filtering the Bernoulli pdf outputs to only include those that are actually observed
+        term_observed_prod_filtered = term_observed_prod[(is_observed1 == 1).T[:, 0]]
+        ## multiplying the bernoulli pdf outputs of all the observed pixels to get their likelihood
+        term_observed_prod_filtered_prodded = np.prod(term_observed_prod_filtered, axis = 0)
+        ## multiplying the observed pixels' likelihood by pi to get a constant N_classes vector that is present in both the numerator and denominator of the probability of unobserved pixel j given observed pixels E.
+        constant_k = pi * term_observed_prod_filtered_prodded
+        ## calcuating the denominator of the desired probability by summing up the per-class constant vector across all vectors, giving a scalar value
+        denominator = np.sum(constant_k)
+        ## calculating the bernoulli pdf output of the unobserved pixel j for all pixels separately
+        bernoulli_jk = np.multiply(np.power(theta, original_image1.T), np.power((1-theta), (1-original_image1).T))
+
+        probabilities_j = (np.sum((bernoulli_jk*constant_k), axis = 1))/denominator
+        imputed_image1 = original_image1
+        # imputed_image1[(is_observed1 == 0)]
+        imputed_image1[0, (is_observed1 == 1).T[:, 0]] = probabilities_j[(is_observed1 == 1).T[:, 0]]
+
+        imputed_image1_ar.append(imputed_image1)
+    imputed_images = np.array(imputed_image1_ar).reshape(original_images.shape[0], is_observed.shape[1])
+    return imputed_images
+
+num_features = train_images.shape[1]
+is_observed = np.random.binomial(1, p=0.3, size=(20, num_features))
+plot_images(train_images[:20] * is_observed)
+
+imputed_images = probabilistic_imputer(theta_est, pi_est, train_images[:20], is_observed)
+plot_images(imputed_images)
