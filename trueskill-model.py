@@ -1,0 +1,191 @@
+import os
+import os.path
+import matplotlib.pyplot as plt
+import wget
+import pandas as pd
+import numpy as np
+from scipy.stats import norm
+import scipy.io
+import scipy.stats
+import torch
+import random
+from torch.distributions.normal import Normal
+from functools import partial
+import matplotlib.pyplot as plt
+
+def diag_gaussian_log_density(x, mu, std):
+  m = Normal(mu, std)
+  return torch.sum(m.log_prob(x), axis=-1) # axis=-1 means sum over the last dimension.
+
+# Implementing the TrueSkill Model 
+
+from numpy.ma.core import exp
+def log_joint_prior(zs_array):
+  log_prior = diag_gaussian_log_density(zs_array, 0, 1)
+  return log_prior
+  pass
+
+def logp_a_beats_b(z_a, z_b):
+  log_p = - torch.logaddexp(torch.tensor([0.0]), torch.tensor(z_b - z_a))
+  pass
+  return log_p
+
+def logp_b_beats_a(z_a, z_b):
+  log_p =   - torch.logaddexp(torch.tensor([0.0]), torch.tensor(z_a - z_b))
+  pass
+  return log_p
+
+def plot_isocontours(ax, func, steps=100):
+    x = torch.linspace(-4, 4, steps=steps)
+    y = torch.linspace(-4, 4, steps=steps)
+    X, Y = torch.meshgrid(x, y)
+    Z = func(X, Y)
+    plt.contour(X, Y, Z )
+    ax.set_yticks([])
+    ax.set_xticks([])
+
+def plot_2d_fun(f, x_axis_label="", y_axis_label="", scatter_pts=None):
+    fig = plt.figure(figsize=(8,8), facecolor='white')
+    ax = fig.add_subplot(111, frameon=False)
+    ax.set_xlabel(x_axis_label)
+    ax.set_ylabel(y_axis_label)
+    plot_isocontours(ax, f)
+    if scatter_pts is not None:
+      plt.scatter(scatter_pts[:,0], scatter_pts[:, 1])
+    plt.plot([4, -4], [4, -4], 'b--')   # Line of equal skill
+    plt.show(block=True)
+    plt.draw()
+
+def log_prior_over_2_players(z1, z2):
+  m = Normal(torch.tensor([0.0]), torch.tensor([[1.0]]))
+  return m.log_prob(z1) + m.log_prob(z2)
+
+def prior_over_2_players(z1, z2):
+  return torch.exp(log_prior_over_2_players(z1, z2))
+  pass
+
+plot_2d_fun(prior_over_2_players, "Player A Skill", "Player B Skill")
+
+def likelihood_over_2_players(z1, z2):
+  return torch.exp(logp_a_beats_b(z1, z2))
+
+plot_2d_fun(likelihood_over_2_players, "Player A Skill", "Player B Skill")
+
+def log_posterior_A_beat_B(z1, z2):
+  return log_prior_over_2_players(z1, z2) + torch.log(likelihood_over_2_players(z1, z2))
+  pass
+
+def posterior_A_beat_B(z1, z2):
+  return torch.exp(log_posterior_A_beat_B(z1, z2))
+
+plot_2d_fun(posterior_A_beat_B, "Player A Skill", "Player B Skill")
+
+def log_posterior_A_beat_B_10_times(z1, z2):
+  return log_prior_over_2_players(z1, z2) + 10*torch.log(likelihood_over_2_players(z1, z2))
+  pass
+
+def posterior_A_beat_B_10_times(z1, z2):
+  return torch.exp(log_posterior_A_beat_B_10_times(z1, z2))
+
+plot_2d_fun(posterior_A_beat_B_10_times, "Player A Skill", "Player B Skill")
+# log_posterior_A_beat_B_10_times(z1z2[:,0], z2z1[:,1]).flatten()
+
+def log_posterior_beat_each_other_10_times(z1, z2):
+  return log_prior_over_2_players(z1, z2) + 10*torch.log(likelihood_over_2_players(z1, z2)) + 10*torch.log(likelihood_over_2_players(z2, z1))
+  pass
+
+def posterior_beat_each_other_10_times(z1, z2):
+  return torch.exp(log_posterior_beat_each_other_10_times(z1, z2))
+plot_2d_fun(posterior_beat_each_other_10_times, "Player A Skill", "Player B Skill")
+
+# Hamiltonian Monte Carlo on Two Players and Toy Data
+
+random.seed(0)
+from tqdm import trange, tqdm_notebook  # Progress meters
+
+def leapfrog(params_t0, momentum_t0, stepsize, logprob_grad_fun):
+  momentum_thalf = momentum_t0    + 0.5 * stepsize * logprob_grad_fun(params_t0)
+  params_t1 =      params_t0      +       stepsize * momentum_thalf
+  momentum_t1 =    momentum_thalf + 0.5 * stepsize * logprob_grad_fun(params_t1)
+  return params_t1, momentum_t1
+
+
+def iterate_leapfrogs(theta, v, stepsize, num_leapfrog_steps, grad_fun):
+  for i in range(0, num_leapfrog_steps):
+    theta, v = leapfrog(theta, v, stepsize, grad_fun)
+  return theta, v
+
+def metropolis_hastings(state1, state2, log_posterior):
+  accept_prob = torch.exp(log_posterior(state2) - log_posterior(state1))
+  if random.random() < accept_prob:
+    return state2  # Accept
+  else:
+    return state1  # Reject
+
+def draw_samples(num_params, stepsize, num_leapfrog_steps, n_samples, log_posterior):
+  theta = torch.zeros(num_params)
+
+  def log_joint_density_over_params_and_momentum(state):
+    params, momentum = state
+    return diag_gaussian_log_density(momentum, torch.zeros_like(momentum), torch.ones_like(momentum)) \
+     + log_posterior(params)
+
+  def grad_fun(zs):
+    zs = zs.detach().clone()
+    zs.requires_grad_(True)
+    y = log_posterior(zs)
+    y.backward()
+    return zs.grad
+
+  sampleslist = []
+  for i in trange(0, n_samples):
+    sampleslist.append(theta)
+
+    momentum = torch.normal(0, 1, size = np.shape(theta))
+
+    theta_new, momentum_new = iterate_leapfrogs(theta, momentum, stepsize, num_leapfrog_steps, grad_fun)
+
+    theta, momentum = metropolis_hastings((theta, momentum), (theta_new, momentum_new), log_joint_density_over_params_and_momentum)
+  return torch.stack((sampleslist))
+
+# Using samples generated by HMC, approximate the joint posterior where we observe player A winning 1 game.
+
+num_players = 2
+num_leapfrog_steps = 20
+n_samples = 2000
+stepsize = 0.01
+
+
+def log_posterior_a(zs):
+  return log_posterior_A_beat_B(zs[0], zs[1])
+
+samples_a = draw_samples(num_players, stepsize, num_leapfrog_steps, n_samples, log_posterior_a)
+plot_2d_fun(posterior_A_beat_B, "Player A Skill", "Player B Skill", samples_a)
+
+# Using samples generated by HMC, approximate the joint posterior where we observe player A winning 10 games against player B. 
+
+num_players = 2
+num_leapfrog_steps = 20
+n_samples = 2000
+stepsize = 0.01
+key = 42
+
+def log_posterior_b(zs):
+  return 10*log_posterior_A_beat_B(zs[0], zs[1])
+
+samples_b = draw_samples(num_players, stepsize, num_leapfrog_steps, n_samples, log_posterior_b)
+ax = plot_2d_fun(posterior_A_beat_B_10_times, "Player A Skill", "Player B Skill", samples_b)
+
+# Using samples generated by HMC, approximate the joint posterior where we observe player A winning 10 games and player B winning 10 games.
+
+num_players = 2
+num_leapfrog_steps = 20
+n_samples = 2000
+stepsize = 0.01
+
+def log_posterior(zs):
+  return 10*log_posterior_A_beat_B(zs[0], zs[1]) + 10*log_posterior_A_beat_B(zs[1], zs[0])
+
+samples_c = draw_samples(num_players, stepsize, num_leapfrog_steps, n_samples, log_posterior)
+ax = plot_2d_fun(posterior_beat_each_other_10_times, "Player A Skill", "Player B Skill", samples_c)
+
