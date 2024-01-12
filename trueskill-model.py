@@ -189,3 +189,85 @@ def log_posterior(zs):
 samples_c = draw_samples(num_players, stepsize, num_leapfrog_steps, n_samples, log_posterior)
 ax = plot_2d_fun(posterior_beat_each_other_10_times, "Player A Skill", "Player B Skill", samples_c)
 
+# Approximate inference conditioned on real data 
+
+wget.download("https://erdogdu.github.io/sta414/hw/hw2/chess_games.csv")
+games = pd.read_csv("chess_games.csv")[["winner_index", "loser_index"]].to_numpy()
+wget.download("https://erdogdu.github.io/sta414/hw/hw2/chess_players.csv")
+names = pd.read_csv("chess_players.csv")[["index", "player_name"]].to_numpy()
+
+games = torch.IntTensor(games)
+
+## Assuming all game outcomes are i.i.d. conditioned on all players' skills, implement a function  log_games_likelihood  
+## that takes a batch of player skills  zs  and a collection of observed games  games  and gives the total log-likelihoods 
+## for all those observations given all the skills.
+
+def log_games_likelihood(zs, games):
+  winning_player_ixs = games[:,0]
+  losing_player_ixs = games[:,1]
+  winning_player_skills =  zs[winning_player_ixs.long()]  # Look up the skill of the winning player in each game.
+  losing_player_skills = zs[losing_player_ixs.long()]     # Look up the skills of the losing player in each game.
+  log_likelihoods = torch.log(likelihood_over_2_players(winning_player_skills, losing_player_skills)) # Compute the log_likelihood of each game outcome.
+  return torch.sum(log_likelihoods)                      #TODO: Combine the log_likelihood of independent events.
+
+def log_joint_probability(zs, games):
+  return log_joint_prior(zs) + log_games_likelihood(zs, games) # Combine log_prior and log_likelihood.
+
+## Run Hamiltonian Monte Carlo on the posterior over all skills conditioned on all the tennis games from the dataset. 
+
+num_players = 1434
+num_leapfrog_steps = 20
+n_samples = 10000
+stepsize = 0.01
+
+def log_posterior(zs):
+  return log_joint_probability(zs, games)
+
+all_games_samples = draw_samples(num_players, stepsize, num_leapfrog_steps, n_samples, log_posterior)
+
+## Based on your samples from the previous question, plot the approximate mean and variance of the marginal skill of 
+## each player, sorted by average skill. 
+
+mean_skills = torch.mean(all_games_samples, dim = 0)
+var_skills = torch.var(all_games_samples, dim = 0)
+
+order = np.argsort(mean_skills) # returns the indices that would sort an array ascendingly
+
+plt.xlabel("Player Rank")
+plt.ylabel("Player Skill")
+plt.errorbar(range(num_players), mean_skills[order], var_skills[order])
+
+## List the names of the 5 players with the lowest mean skill and 5 players with the highest mean skill according to your samples. 
+
+print("Names of the 5 players with the lowest mean skill are", names[order[0:5]], "in ascending order")
+print("Names of the 5 players with the highest mean skill are", names[order[(len(names)-5):(len(names)+1)]], "in ascending order")
+
+## Use a scatterplot to show your samples from the joint posterior over the skills of lelik3310 and thebestofthebad. Include the line of equal skill.
+
+from tensorflow.python.ops.gen_array_ops import Size
+lelik3310_ix = 496
+thebestofthebad_ix = 512
+
+sample_lelik3310 = all_games_samples[:, lelik3310_ix]
+sample_thebestofthebad = all_games_samples[:, thebestofthebad_ix]
+plt.scatter(sample_lelik3310, sample_thebestofthebad, color = '#88c999')
+plt.plot([3, -3], [3, -3], 'r--')   # Line of equal skill
+plt.xlabel("lelik3310 skills")
+plt.ylabel("thebestofthebad skills")
+
+## Using your samples, find the players that have the eleventh highest mean skill. 
+
+descending_ordered_sample = (- mean_skills).argsort()
+ix_11_highest_mean_skill = descending_ordered_sample[11-1] # getting index of the 11th highest player in the sample
+sample_11_highest_mean_skill = all_games_samples[:, ix_11_highest_mean_skill]
+print("The player with the eleventh highest highest mean skill is", names[ix_11_highest_mean_skill])
+
+count = 0
+for i in range(10000):
+    if sample_11_highest_mean_skill[i] >= sample_lelik3310[i]:
+       count += 1
+print("The estimated probability that the player with the eleventh highest highest mean skill is not worse than lelik3310 is",
+count/10000)
+
+
+
