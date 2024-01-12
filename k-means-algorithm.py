@@ -2,7 +2,6 @@ import scipy
 import numpy as np
 import itertools
 import matplotlib.pyplot as plt
-# from numpy.core import matrix_multiply as mm
 
 # Generating the Data
 # Set the number of points N=400, their dimension  D=2, and the number of clusters  K=2 , Sample 200 data points for k=1 and 200 for k=2
@@ -31,7 +30,7 @@ plt.plot(np.array([0.1, 6.0]), np.array([0.1, 0.1]), '^', color = "crimson", lab
 plt.legend()
 plt.show()
 
-## Implement and Run K-Means algorithm
+# Implement and Run K-Means algorithm
 
 def cost(data, R, Mu):
     D = data.ndim
